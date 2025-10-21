@@ -1,0 +1,8 @@
+mode=flowrate
+value=0.2
+repeat=4/5
+viscosity_a=40
+viscosity_b=10
+flow_override=0.2
+print_speed_F=1500
+travel_speed_F=1000

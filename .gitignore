@@ -1,0 +1,24 @@
+# Directories
+
+**bin/
+**bin-int/
+
+**assets/common/
+
+# Files
+*.user
+*imgui.ini
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+
+#ML
+*.zip
+tb_*
+viz
+episodes

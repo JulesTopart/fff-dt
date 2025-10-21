@@ -1,0 +1,367 @@
+//?#version 430
+
+#pragma once
+//?#include "../common/uniforms.comp"
+//?#include "../common/constants.comp"
+//?#include "../common/buffers.comp"
+//?#include "../common/nns.comp"
+//?#include "sph.kernels.comp" 
+//?#include "boundary.comp" 
+#include "elasticity.comp" 
+
+float pbs_computeDeltaLambda(uint i);
+vec3 pbs_computePositionDelta(uint i);
+
+#define EXTRACT_ROTATION
+//#define USE_THERMAL_ELASTICITY
+
+const float BOND_CAP = 50.0;  // start here, adjust
+
+void applyBoundaryCondition_static(uint i){
+    if(b_Xi.x < -(0.5*100 - 2)){
+		//ssbo_predicted_position[index].xyz = ssbo_position[index].xyz = rotateAroundX(ssbo_rest_position[index].xyz, u_pullDistance*0.1);
+		b_pi = b_xi = b_Xi;
+        b_vi *= 0;
+	}else if(b_Xi.x > 0.5*100 - 2){
+		//ssbo_predicted_position[index].xyz = ssbo_position[index].xyz = rotateAroundX(ssbo_rest_position[index].xyz, -u_pullDistance*0.1);
+		b_pi = b_xi = b_Xi;
+        b_vi *= 0;
+	}
+}
+/*
+void applyBoundaryCondition_rotate(uint i){
+    // Axis of rotation (here Y axis, change if you want X/Z)
+    vec3 axis = vec3(1.0, 0.0, 0.0);
+
+    if (b_Xi.x < -(0.5*100 - 2)) {
+        // Rotate rest position by +u_angle
+        mat3 R = matrixFromAxisAngle(axis, +u_angle);
+        vec3 rotated = R * (b_Xi.xyz);
+
+        b_pi = b_xi = vec4(rotated, 1.0);
+        b_vi *= 0.0;
+
+    } else if (b_Xi.x > 0.5*100 - 2) {
+        // Rotate rest position by -u_angle
+        mat3 R = matrixFromAxisAngle(axis, -u_angle);
+        vec3 rotated = R * (b_Xi.xyz);
+
+        b_pi = b_xi = vec4(rotated, 1.0);
+        b_vi *= 0.0;
+    }
+
+}
+*/
+
+
+void pbs_step(uint i, uint kernel) {
+	if(kernel == 0){
+		b_xi.xyz = b_pi.xyz;
+		vec3 a = vec3(0, 0, -u_g);
+
+        b_lambda_i = 0.0;
+
+        b_vi.xyz += 0.5 * a * u_dt;
+		b_pi.xyz += 0.98*b_vi.xyz * u_dt;
+		return;
+	}
+	if(kernel == 1){
+		float delta = pbs_computeDeltaLambda(i);
+		b_dlambda_i = delta;
+        b_lambda_i += delta;
+		return;
+	}
+
+	if(kernel == 2){
+        b_pi.xyz += pbs_computePositionDelta(i);
+	    b_pi.xyz += boundary_solveFloorCollision(i); //apply floor induced deformation
+        
+        //applyBoundaryCondition_static(i);
+        //applyBoundaryCondition_rotate(i);
+
+		
+		b_vi.xyz = (b_pi.xyz - b_xi.xyz)/u_dt; // First order velocity update
+
+
+        vec3 a = vec3(0, 0, -u_g);
+        b_vi.xyz += 0.5 * a * u_dt; // Add remaining half gravity
+		b_vi.xyz += pbs_computeXPSH(i);
+
+		return;
+	}
+
+	if(kernel == 3){	
+		
+		b_rho_i = pbs_computeDensity(i);
+		b_sigma_i = mat4(0);
+		b_Fi = mat4(1.0);
+		b_Fi[3] = vec4(0);
+
+        float angle = radians(90);
+        mat3 R = matrixFromAxisAngle(vec3(1,0,0), angle);
+        //b_vi.xyz = 10.0* R * (b_pi.xyz - vec3(0,0,30));
+
+		b_Fi[3] = vec4(0,0,0,1);
+
+        vec3 xi0 = b_Xi.xyz; // i reference position
+        // Kernel correction
+        vec3 position = b_Xi.xyz;
+        mat3 L = mat3(0);
+        vec3 gamma_i_num = vec3(0);
+        float gamma_i_denom = 0;
+        int n = 0;
+        OVERNNS
+            if(i == j) continue;
+            if(!is_solid(j)) continue;
+            //if(distance(b_Xj.xyz, b_Xi.xyz) > H) continue;
+            //if(distance(b_pj.xyz, b_pi.xyz) > H) continue;
+            vec3 xj0 = b_Xj.xyz;
+
+            vec3 rij0 = xj0 - xi0;
+            float dij0 = length(rij0);
+
+            if(dij0 < 1e-6 || dij0 > H) continue;
+
+            vec3 grad_Wij = poly6_grad(rij0);
+            gamma_i_num += grad_Wij;
+            gamma_i_denom += poly6(rij0);
+            L += outerProduct(grad_Wij, rij0);
+            n++;
+        OVERNNS_END
+
+        if(n > 6)
+            L = pseudoInverse(L);
+        else 
+            L = mat3(1.0);
+
+        vec3 gamma_i = gamma_i_num / gamma_i_denom;
+
+        mat4 L4;
+        L4 = mat4(mat3(L)); // First column
+        L4[3] = vec4(gamma_i, gamma_i_denom); // Third column
+        b_Li = L4;
+
+		return;
+	}
+     
+}
+
+
+vec3 correctedKernelGrad(vec3 r, mat4 corr){
+    
+    mat3 L = mat3(0);
+    L[0] = corr[0].xyz;
+    L[1] = corr[1].xyz;
+    L[2] = corr[2].xyz;
+
+    vec3 gamma_i = vec3(corr[3].xyz);
+
+    //return u_V0 * L * ((poly6_grad(r) + gamma_i * poly6(r)));
+    return u_V0 * L * poly6_grad(r);
+}
+
+
+/**/
+
+float pbs_computeDeltaLambda(uint i) {
+
+    float alpha = 1.0/(u_dt*u_dt);
+
+    float restVolume_i = u_V0;// mm3
+    float restVolume_j = u_V0;// mm3
+    
+    vec3 xi = b_pi.xyz; // i current position
+    vec3 xi0 = b_Xi.xyz; // i reference position
+
+    mat3 F = mat3(0); // Deformation tensor
+    vec3 position = b_Xi.xyz;
+
+   /**/
+   mat3 R = mat3(1.0);
+   #ifdef EXTRACT_ROTATION
+   OVERNNS
+        if(i == j) continue;
+        if(!is_solid(j)) continue;
+        //if(distance(b_Xj.xyz, b_Xi.xyz) > H) continue;
+        //if(distance(b_pj.xyz, b_pi.xyz) > H) continue;
+
+        vec3 xj = b_pj.xyz;
+        vec3 xj0 = b_Xj.xyz;
+
+        vec3 rij0 = (xj0 - xi0);
+        vec3 grad_Wij = correctedKernelGrad(rij0, b_Li);
+
+        F += outerProduct(xj-xi, grad_Wij); //dimensionless
+    OVERNNS_END
+
+    vec4 qR = b_Fi[3].xyzw; //previous Rotation
+    R = extractRotation(F, qR ,50);
+    #endif
+
+
+    F = mat3(0.0);
+
+   // Deformation gradient
+   mat3 M = mat3(0);
+   float sumGradCj = 0;
+   vec3 sumGradCi = vec3(0);
+   int n = 0;
+   OVERNNS
+        if(i == j) continue;
+        if(!is_solid(j)) continue;
+        //if(distance(b_Xj.xyz, b_Xi.xyz) > H) continue;
+        //if(distance(b_pj.xyz, b_pi.xyz) > H) continue;
+
+        vec3 xj = b_pj.xyz;
+        vec3 xj0 = b_Xj.xyz;
+
+        vec3 rij0 = xj0 - xi0;
+
+        #ifdef EXTRACT_ROTATION
+        vec3 grad_Wij = R*correctedKernelGrad(rij0, b_Li);
+        #else
+        vec3 grad_Wij = correctedKernelGrad(rij0, b_Li);
+        #endif
+
+        float r0 = max(length(xj0 - xi0), 1e-6);
+        float s  = length(b_pj.xyz - b_pi.xyz) / r0;
+        float wS = 1.0 / max(s, 1.0);   // no effect for s<=1; decays like 1/s for s>1
+
+        vec3 ui = xi - xi0;
+        vec3 uj = xj - xj0;
+
+        #ifdef EXTRACT_ROTATION
+        vec3 uij = (xj - xi) - R*(xj0-xi0);
+        #else
+        vec3 uij = (xj - xi) - (xj0 - xi0);
+        #endif
+
+        M += wS*outerProduct(grad_Wij, grad_Wij);
+        sumGradCi += wS*grad_Wij.xyz;
+        F += wS*outerProduct(uij, grad_Wij); //dimensionless
+
+        n++;
+    OVERNNS_END    
+    F += mat3(1.0);   
+    
+
+    if(0 == 0){ //save F
+        b_Fi[0].xyz = F[0];
+        b_Fi[1].xyz = F[1];
+        b_Fi[2].xyz = F[2];
+
+        #ifdef EXTRACT_ROTATION
+        b_Fi[3].xyzw = qR;
+        #endif
+    }
+
+    
+    //mat3 Etot = computeSmallStrain(F);
+
+    mat3 C = transpose(F) * F;   // right Cauchy–Green
+    mat3 Etot = 0.5 * (C - mat3(1.0));
+
+
+    mat3 E_el = Etot; //temporary for conditionnal evaluation, see below
+
+    #ifdef USE_THERMAL_ELASTICITY
+    float thermalExp = 3.0 * (phase(i) == SOLIDA ? 16.5*1e-6: 23.0*1e-6); //copper and alu
+    mat3 E_th = mat3(1.0) * thermalExp * (b_Ti - (275.5+25.0));
+    E_el -= E_th
+    #endif
+
+    mat3 P = computeSecondPiolaKirchhoffStressSmall(E_el);
+    //if(b_Ti >= 500) P *= 0.1;
+    //mat3 P = computeSecondPiolaKirchhoffStress(F, R);
+
+    b_sigma_i = mat4(mat3(P));
+
+    //sumGradCj = tr(P*P);
+    sumGradCj = tr(P*P*M);
+    vec3 gradCk = -P * sumGradCi;
+    sumGradCj += dot(gradCk, gradCk);
+
+    float denominator = 1.0*sumGradCj;
+    float psi = computeStrainEnergySmall(E_el);
+    //float psi = computeStrainEnergyDensity(E_el);
+    //float psi = computeStrainEnergyDensity(F, R);
+	float lambda = -(psi + b_lambda_i * alpha) / (denominator + alpha + 1e-6);
+
+    /**/
+    b_sigma_i[3].x = psi;
+    b_sigma_i[3].y = lambda;
+    b_sigma_i[3].z = tr(P);
+    b_sigma_i[3].w = denominator;
+    /**/
+
+    if(n < 6) return 0;
+    //if(isnan(lambda)) lambda = 0.0;
+    return lambda;
+}
+
+
+
+
+
+
+
+
+
+//Compute position deltas w neigbor
+vec3 pbs_computePositionDelta(uint i) {
+	vec3 posDelta = vec3(0.0f);
+	vec3 position = b_Xi.xyz;
+    vec3 xi0 = b_Xi.xyz; // i reference position
+
+    float restVolume_i = u_V0;// ((1e3*mj)/b_rho_j); //g/(g/cm3) -> mm3
+    float restVolume_j = u_V0;// ((1e3*mj)/b_rho_j); //g/(g/cm3) -> mm3
+
+    float deltaLambda_i = b_lambda_i;
+    
+    mat3 R = mat3(1.0);
+    #ifdef EXTRACT_ROTATION
+    R = quaternionToMatrix(b_Fi[3]);
+    #endif
+
+   float n = 0;
+	OVERNNS
+		if(j == i) continue;
+        if(!is_solid(j)) continue;
+        //if(distance(b_Xj.xyz, b_Xi.xyz) > H) continue;
+        //if(distance(b_pj.xyz, b_pi.xyz) > H) continue;
+
+        vec3 xj0 = b_Xj.xyz;
+        vec3 rij0 = xj0 - xi0;
+
+        float r0 = max(length(xj0 - xi0), 1e-6);
+        float s  = length(b_pj.xyz - b_pi.xyz) / r0;
+        float wS = 1.0 / max(s, 1.0);   // no effect for s<=1; decays like 1/s for s>1
+
+
+        #ifdef EXTRACT_ROTATION
+        vec3 grad_Wij = R*correctedKernelGrad(rij0, b_Li);
+        #else
+        vec3 grad_Wij = correctedKernelGrad(rij0, b_Li);
+        #endif
+        
+        float deltaLambda_j = b_lambda_j;
+
+        mat3 PKi = mat3(b_sigma_i);
+        mat3 PKj = mat3(b_sigma_j);
+
+        posDelta += wS*((deltaLambda_j * PKj * -grad_Wij) - (deltaLambda_i * PKi * grad_Wij));
+        n++;
+	OVERNNS_END
+
+    float relaxation = 0.5;
+
+    if(n < 6) return vec3(0);
+    if(n >= 6) relaxation/=n;
+
+    vec3 correction = relaxation*posDelta;
+    float maxCorr = 0.1 * H;
+    float cN = length(correction);
+    if (cN > maxCorr) correction *= (maxCorr / cN);
+    return correction;
+}
+

@@ -1,0 +1,9 @@
+mode=flowrate
+value=2.5133
+repeat=1/1
+viscosity_a=200
+viscosity_b=200
+flow_override=2.5133
+print_speed_F=20
+layer_height=2
+travel_speed_F=300

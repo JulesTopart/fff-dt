@@ -1,0 +1,8 @@
+mode=speed
+value=2500
+repeat=1/5
+viscosity_a=70
+viscosity_b=17.5
+flow_override=0.5
+print_speed_F=2500
+travel_speed_F=1000

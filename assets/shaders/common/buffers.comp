@@ -1,0 +1,193 @@
+//? #version 430
+#ifndef INCLUDE_BUFFERS_GLSL
+#define INCLUDE_BUFFERS_GLSL
+
+//? #include "uniforms.comp"
+//? #include "constants.comp"
+
+//Macro to access buffer elements
+#define phase(index)		ssbo_meta[index].x		//phase
+#define bin_index(index)	ssbo_meta[index].y		//bin index
+#define id(index)			ssbo_meta[index].z		//particle ID
+#define sorted_id(index)	ssbo_meta[index].w		//particle destination ID (sort)
+
+//Free aliases
+#define mi u_mass
+#define mj u_mass
+
+//buffer access aliases (cost memory bandwidth)
+#define b_xi ssbo_position[i]
+#define b_xj ssbo_position[j]
+
+#define b_pi ssbo_predicted_position[i]
+#define b_pj ssbo_predicted_position[j]
+
+#define b_dpi ssbo_position_correction[i]
+#define b_dpj ssbo_position_correction[j]
+
+#define b_last_xi ssbo_last_position[i]
+#define b_last_xj ssbo_last_position[j]
+
+#define b_Xi ssbo_last_position[i]
+#define b_Xj ssbo_last_position[j]
+
+#define b_lambda_i ssbo_lambda[i].lambda
+#define b_lambda_j ssbo_lambda[j].lambda
+
+#define b_dlambda_i ssbo_lambda[i].dlambda
+#define b_dlambda_j ssbo_lambda[j].dlambda
+
+#define b_vi ssbo_velocity[i]
+#define b_vj ssbo_velocity[j]
+
+#define b_sigma_i ssbo_stress[i] //Stress
+#define b_sigma_j ssbo_stress[j]
+
+#define b_Ti ssbo_temperature[i].x
+#define b_Tj ssbo_temperature[j].x
+
+#define b_dTi ssbo_temperature[i].y
+#define b_dTj ssbo_temperature[j].y
+
+#define b_rho_i ssbo_density[i]
+#define b_rho_j ssbo_density[j]
+
+//computation aliases (cost memory bandwidth and/or operations)
+#define c_Vij (b_vi.xyz - b_vj.xyz)
+#define c_Vji (b_vj.xyz - b_vi.xyz)
+#define c_Rij (b_pi.xyz - b_pj.xyz)
+#define c_Rji (b_pj.xyz - b_pi.xyz)
+#define c_Dij distance(b_pi.xyz, b_pj.xyz)
+
+#define c_wi (1.0/particleMass)
+#define c_wj (1.0/particleMass)
+
+
+#define b_Fi ssbo_F[i]
+#define b_Fj ssbo_F[j]
+
+#define b_Li ssbo_L[i]
+
+
+
+
+
+struct Bin {
+	uint count;
+	uint sum;
+	uint csum;
+	uint index;
+};
+
+struct CopyContent{
+	vec4 last_position;
+	vec4 position;
+	vec4 predicted_position;
+	vec4 position_correction;
+	vec4 velocity;
+	//mat4 F;
+	//mat4 L;
+	uvec4 meta;
+	vec2 temperature;
+	float density;
+	float lambda;
+};
+
+//Atomic 
+
+//layout(offset = 0) uniform atomic_uint uCounter;
+
+
+
+// SSBO declaration
+layout(std430) buffer last_position_buffer {
+	vec4 ssbo_last_position[];
+};
+
+layout(std430) buffer position_buffer {
+	vec4 ssbo_position[];
+};
+
+layout(std430) buffer predicted_position_buffer {
+	vec4 ssbo_predicted_position[];
+};
+
+layout(std430) buffer correction_buffer {
+	vec4 ssbo_position_correction[];
+};
+
+
+layout(std430) buffer F_buffer {
+	mat4 ssbo_F[];
+};
+
+layout(std430) buffer L_buffer {
+	mat4 ssbo_L[];
+};
+
+layout(std430) buffer stress_buffer {
+	mat4 ssbo_stress[];
+};
+
+
+layout(std430) buffer velocity_buffer {
+	vec4 ssbo_velocity[];
+};
+
+layout(std430) buffer density_buffer {
+	float ssbo_density[];
+};
+
+struct Lambda{
+	float lambda;
+	float dlambda;
+};
+
+layout(std430) buffer lambda_buffer {
+	Lambda ssbo_lambda[];
+};
+
+layout(std430) buffer temperature_buffer {
+	vec2 ssbo_temperature[];
+};
+
+layout(std430) buffer meta_buffer {
+	uvec4 ssbo_meta[]; //phase, binindex, id , sortedID
+};
+
+layout(std430) buffer copy_buffer {
+	CopyContent ssbo_copy[]; //phase, binindex, id , sortedID
+};
+
+layout(std430) buffer emitter_position_buffer {
+	vec4 ssbo_emitter_positions[];
+};
+
+layout(std430) buffer bin_buffer {
+	Bin ssbo_bins[];
+};
+
+
+bool is_fluid(uint index){
+	uint phaseIndex = ssbo_meta[index].x;
+	return phaseIndex == FLUID_A || phaseIndex == FLUID_B;
+}
+
+bool is_solid(uint index){
+	uint phaseIndex = ssbo_meta[index].x;
+	return phaseIndex == SOLID_A || phaseIndex == SOLID_B;
+}
+
+int phaseAB(uint index){
+	if(ssbo_meta[index].x == FLUID_A || ssbo_meta[index].x == SOLID_A) return 0;
+	if(ssbo_meta[index].x == FLUID_B || ssbo_meta[index].x == SOLID_B) return 1;
+	return -1;
+}
+
+
+float getViscosity(uint index){
+	uint phaseIndex = ssbo_meta[index].x;
+	return phaseIndex == FLUID_A ? u_viscosity_a :  (phaseIndex == FLUID_B ? u_viscosity_b :  0);
+}
+
+#endif// INCLUDE_BUFFERS_HLSL

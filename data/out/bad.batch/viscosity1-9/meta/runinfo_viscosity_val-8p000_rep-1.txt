@@ -1,0 +1,8 @@
+mode=viscosity
+value=8
+repeat=1/1
+viscosity_a=8
+viscosity_b=2
+flow_override=1
+print_speed_F=3000
+travel_speed_F=1000

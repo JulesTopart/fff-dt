@@ -1,0 +1,9 @@
+mode=layer
+value=0.4
+repeat=1/1
+viscosity_a=200
+viscosity_b=200
+flow_override=4
+print_speed_F=20
+layer_height=4
+travel_speed_F=300

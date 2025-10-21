@@ -1,0 +1,9 @@
+mode=viscosity
+value=10
+repeat=1/1
+viscosity_a=10
+viscosity_b=2.5
+flow_override=1
+print_speed_F=1000
+layer_height=5
+travel_speed_F=1000

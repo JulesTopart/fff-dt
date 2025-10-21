@@ -1,0 +1,9 @@
+mode=linked
+value=0.4
+repeat=1/1
+viscosity_a=70
+viscosity_b=17.5
+flow_override=0.4
+print_speed_F=1000
+layer_height=5
+travel_speed_F=1000
