@@ -19,14 +19,7 @@ using namespace Merlin;
 namespace fs = std::filesystem;
 
 static constexpr int kMaxPlanValues = 30;  // new
-float viscosity = 70.0f; //Viscosity of the fluid
-
-
-
-
-
-
-
+float viscosity = 500.0f; //Viscosity of the fluid
 
 
 

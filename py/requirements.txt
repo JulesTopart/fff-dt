@@ -1,0 +1,7 @@
+gymnasium 
+zmq 
+numpy 
+stable-baselines3 
+tensorboard
+opencv-python
+tensorboard

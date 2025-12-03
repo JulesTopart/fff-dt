@@ -1,0 +1,53 @@
+//?#version 430
+
+#pragma once
+//?#include "../common/uniforms.comp"
+//?#include "../common/constants.comp"
+//?#include "../common/buffers.comp"
+//?#include "../common/nns.comp"
+//?#include "sph.kernels.comp" 
+//?#include "boundary.comp" 
+
+float computeTemperatureDelta(uint i) {
+
+	float temperatureDelta = 0.0;
+	vec3 position = b_pi.xyz;
+	bool isInNozzle = false;
+
+	vec4 nozzle = u_emitterTransform * vec4(0,0,0,1);
+	if ((b_pi.z > nozzle.z-1 && distance(nozzle.xy, b_pi.xy) < 10))
+		isInNozzle = true;
+
+	OVERNNS
+		if(phase(j) == UNUSED) continue;
+		if(c_Dij < 1e-6 || c_Dij > H) continue;
+		float rhoj = mj / (3.1415926*(4/3)*pow(cst_particleRadius,3));
+		float lambda = 1.0e-1;//( 0.13 / (1590  * rhoj));
+		
+		float delta = 0;
+		if(phase(j) == BOUNDARY+1){
+			delta += poly6(c_Dij) *lambda*(b_Tj-b_Ti)/(c_Dij*1e-3);
+			isInNozzle = true;
+		}else{
+			delta +=  poly6(c_Dij) * lambda*(b_Tj-b_Ti)/(c_Dij*1e-3);
+		}
+		clamp(delta, -10.0, 10.0);
+		temperatureDelta += delta;
+	OVERNNS_END
+	//temperatureDelta /= float(n);
+	
+	//vec3 nozzle_position = (u_emitterTransform * vec4(0,0,0,1.0)).xyz;
+
+
+	if(!isInNozzle){
+		temperatureDelta += 9000.0 * (298.15 - b_Ti)*u_dt; //fan
+		
+		if(b_pi.z < 3) temperatureDelta += 20000.0 * (275.15 + 60.0 - b_Ti)*u_dt; //bed
+
+	}else temperatureDelta += 900.0 * (298.15 - b_Ti)*u_dt; //losses
+
+	
+	//temperatureDelta = clamp(temperatureDelta, -320000.0,302000.0);
+	if(isnan(temperatureDelta)) return 0;
+	return temperatureDelta;
+}

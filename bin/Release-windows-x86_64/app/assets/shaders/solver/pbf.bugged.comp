@@ -1,0 +1,282 @@
+//?#version 430
+
+#pragma once
+//?#include "../common/uniforms.comp"
+//?#include "../common/constants.comp"
+//?#include "../common/buffers.comp"
+//?#include "../common/nns.comp"
+//?#include "sph.kernels.comp" 
+//?#include "boundary.comp" 
+
+float pbf_computeLambda(uint i);
+vec3 pbf_computePositionDelta(uint i);
+vec3 pbf_computeXPSH(uint i);
+
+
+void pbf_step(uint i, uint kernel) {
+	if(kernel == 0){
+		b_last_xi = b_xi;
+		b_xi = b_pi;
+		vec3 a = vec3(0, 0, -u_g);
+
+		//semi-implicit Euler integration (or Sympletic scheme)
+		b_vi.xyz += a * u_dt;
+		//b_vi.xyz -= computeViscosityForce(i) * u_dt;
+		b_pi.xyz += 0.998*b_vi.xyz * u_dt;
+		return;
+	}
+
+	if(kernel == 1){ //compute lagrange multiplier
+		b_dlambda_i = pbf_computeLambda(i);
+		return;
+	}
+		
+	if(kernel == 2){//correct density error and update position
+		b_dpi.xyz = pbf_computePositionDelta(i);
+		b_dpi.xyz += boundary_solveFloorCollision(i);
+		return;
+	}
+
+	if(kernel == 3){//apply XSPH velocity correction
+		vec3 corr = b_dpi.xyz;
+		if(isnan(corr.x) || isnan(corr.y) || isnan(corr.z)) corr = vec3(0);
+
+		//applyViscosityConstraint(i);
+		b_pi.xyz += corr;
+
+		//b_vi.xyz = (b_pi.xyz - b_xi.xyz)/u_dt; // First order velocity update
+		b_vi.xyz = (1.0/u_dt) * (1.5*b_pi.xyz - 2.0* b_xi.xyz + 0.5*b_last_xi.xyz); // Second order velocity update
+		b_vi.xyz = boundary_dampFloorCollision(i);
+		
+		//sigma_i = mat4(visco_computeViscoStress(i));
+		return;
+	}
+
+	if(kernel == 4){//apply XSPH velocity correction
+		//b_dpi.xyz = pbf_computeXPSH(i);
+		//b_vi.xyz += b_dpi.xyz;
+		b_vi.xyz += pbf_computeXPSH(i);
+		//b_vi.xyz -= computeViscosityForce(i) * u_dt;
+		if(b_xi.z < 3.0*cst_particleRadius) b_vi.xyz *= 0.1;
+		return;
+	}
+}
+
+vec3 pbf_computeXPSH(uint i){
+	vec3 xsphSum = vec3(0);
+	vec3 position = b_pi.xyz;
+
+	OVERNNS
+		if (j == i) continue;
+		if (c_Dij < EPSILON || c_Dij > H) continue;
+
+		vec3 vji = c_Vji;
+		float Wij = poly6(c_Rij);
+
+		// Clamp relative velocity
+		const float maxVel = 10.0 * H;
+		float vji_mag = length(vji);
+		if (vji_mag > maxVel) 
+			vji *= (maxVel / vji_mag); // optional
+
+		// Directional damping (more stable)
+		vec3 dir = normalize(c_Rij);
+		float v_dot = dot(vji, dir);
+
+		float rho_ij = 0.5 * (b_rho_i + b_rho_j);
+		if (rho_ij < EPSILON) continue;
+
+		float multiplier = getViscosity(i)*0.01;
+
+		// Phase-aware control
+		switch(phase(j)) {
+			case FLUID_A:
+			case FLUID_B:
+			case SOLID_A:
+			case SOLID_B:
+				multiplier *= 1.0;
+				break;
+			case BOUNDARY:
+			case BOUNDARY+1:
+			case BOUNDARY+2:
+				multiplier *= 1.0;
+				break;
+		}
+
+		//vec3 xsph = multiplier * v_dot * dir * Wij / rho_ij;
+		vec3 xsph = multiplier * v_dot * dir * Wij;
+		xsphSum += xsph;
+	OVERNNS_END
+
+	const float maxValue = 200.0 * H;
+	xsphSum = clamp(xsphSum, vec3(-maxValue), vec3(maxValue));
+	return xsphSum;
+}
+
+
+float pbf_computeLambda(uint i) {
+    float rho0 = u_rho0;
+    float sumGradCj = 0;
+    vec3 gradCi = vec3(0);
+    float density = 0.0;
+    vec3 position = b_pi.xyz;
+
+    OVERNNS
+		float dist = c_Dij;
+		if(dist > H) continue;
+		
+		vec3 diff = c_Rij;
+		vec3 gradCj = spiky_grad(diff);
+
+		if(is_fluid(phase(i))){
+			gradCi += mj * gradCj;
+		}/*
+		else if (phase(j) == SOLID){
+			if(b_rho_j > EPSILON)
+			gradCi += 20.0*mj * gradCj;
+		}*/else if (phase(j) >= BOUNDARY){
+			if(b_rho_j > EPSILON)
+				gradCi +=(1.0/b_rho_j) * gradCj;
+		}/**/
+		
+		if(i != j && dist > EPSILON){
+			if(is_fluid(phase(i))){
+				sumGradCj += dot(gradCj, gradCj);
+				density += mj * poly6(dist);
+			}
+			/*
+			else if (phase(j) == SOLID){
+				density += 10.0 * 0.7*(rho0/b_rho_j) * 2.0 * poly6(dist);
+				vec3 gradCk = 10.0*(1.0/b_rho_j) * 2.0 *  gradCj;
+				sumGradCj += dot(gradCk, gradCk);
+			}*/
+			else if (phase(j) >= BOUNDARY){
+				density += 0.2* poly6(dist);
+				if(b_rho_j > EPSILON){
+
+					density += 0.1*(rho0/b_rho_j) * poly6(dist);
+					vec3 gradCk = (1.0/b_rho_j) * gradCj;
+					sumGradCj += dot(gradCk, gradCk);
+					
+				}
+			}/**/
+		}
+		
+	OVERNNS_END
+
+
+
+	sumGradCj += dot(gradCi, gradCi);
+	sumGradCj = max(sumGradCj, EPSILON);
+
+	#ifdef USE_ONLY_POSITIVE_PRESSURE
+		b_rho_i = max(density, rho0);
+		float C = max((density / rho0) - 1.0, 0.0);
+	#else
+		b_rho_i = density;
+		float C = (density / rho0) - 1.0;
+	#endif
+
+	    //return - ((1.0/mi) * C) / (sumGradCj/pow(rho0, 2) + EPSILON);
+    //return -C / (sumGradCj/pow(rho0, 2) + EPSILON);
+	float compliance = 0.00001;
+	float alpha = compliance / (u_dt*u_dt);   // e.g. compliance = 1e-6
+	return -C / (sumGradCj + alpha + EPSILON);
+}
+
+//Compute position deltas w neigbor
+vec3 pbf_computePositionDelta(uint i) {
+	vec3 posDelta = vec3(0.0f);
+	float rho0 = u_rho0;
+	float sCorr = 0.0;
+	
+	#ifdef USE_ONLY_POSITIVE_PRESSURE
+		if(b_rho_i -  u_rho0 < 0) return posDelta;
+	#endif
+
+	//float closestSDF = 0.0;
+	//float closestSDF_distance = 10000.0;
+	//vec3 closestSDF_grad = vec3(0);
+	
+	vec3 sumSDFGrad = vec3(0.0);
+	float sumSDFWeight = 0.0;
+	uint numNeihbors = 0;
+
+	vec3 position = b_xi.xyz;
+	OVERNNS
+		//if(j == i) continue;
+		float dist = c_Dij;
+		if(dist > H || dist < EPSILON) continue;
+
+		sCorr = -u_artificialPressureMultiplier * H2 * pow(poly6(dist) / poly6(normalize(vec3(1)) * 0.1*H), 4);
+		//sCorr = -u_artificialPressureMultiplier * pow(poly6(dist) / poly6(normalize(vec3(1)) * 0.2*H), 4);
+
+		if(is_fluid(j) || is_solid(j)){
+			//posDelta += (spiky_grad(c_Rij) * (b_dambda_i + b_dlambda_j + sCorr)) / rho0;
+			
+			if(j != i)
+				posDelta += spiky_grad(c_Rij) * (b_dlambda_i + b_dlambda_j + sCorr);
+			else 
+				posDelta += spiky_grad(c_Rij) * (b_dlambda_i + b_dlambda_j + sCorr);
+			
+		}else if( phase(j) >= BOUNDARY && sCorr <0){
+			if(j != i && spiky(c_Rij) > 0)
+				posDelta += 0.5*spiky_grad(c_Rij) * (b_dlambda_i + sCorr);
+
+			//SDF Correction averaging
+			//vec4 sdf = b_dpj;
+			
+			//sumSDFWeight += b_dpj.w * poly6(c_Dij);
+			
+
+			/*
+			if(c_Dij < closestSDF_distance) {
+				closestSDF = b_dpj.w;
+				closestSDF_grad = b_dpj.xyz;
+				closestSDF_distance = c_Dij;
+			}/**/
+			
+			/**/
+
+			//if(c_Dij > 0.3*H)
+			if(c_Dij > 0.5*H && c_Dij < 0.6*H) 
+			{
+				numNeihbors ++;
+				sumSDFGrad += b_dpj.xyz * poly6(c_Dij); // push out
+				sumSDFWeight += b_dpj.w;
+			}/**/
+
+
+
+		}else if(is_solid(j)){
+			if(j != i)
+				posDelta += 1.0*spiky_grad(c_Rij) * (b_dlambda_i + 0.0*sCorr);
+		}
+		/*
+		else if(is_solid(j)){
+			posDelta += 0.1*spiky_grad(c_Rij) * (1.0/b_rho_j) * (2.0 * b_lambda_i + sCorr);
+		}
+		else if(phase(j) >= BOUNDARY){
+			posDelta += 0.1*spiky_grad(c_Rij) * (1.0/b_rho_j) * (2.0 * b_lambda_i + sCorr);
+		}/**/
+
+	OVERNNS_END
+	posDelta /= rho0;
+
+	//SDF Correction
+	float stiffness = 1.0; // 0 = no correction, 1 = full projection
+	sumSDFWeight /= float(numNeihbors);
+
+	vec4 nozzle = u_emitterTransform * vec4(0,0,0,1);
+	if ((b_pi.z > nozzle.z && distance(nozzle.xy, b_pi.xy) < 20))
+		sumSDFGrad.xy = -normalize(nozzle.xy - b_pi.xy);
+
+	if (sumSDFWeight > 0.0 && sumSDFWeight < 100.0) {
+	//if (closestSDF > 0.0) {
+		
+		posDelta -= stiffness * normalize(sumSDFGrad) * sumSDFWeight;
+		//posDelta -= stiffness * normalize(closestSDF_grad) * closestSDF;
+	}
+	posDelta = clamp(posDelta, -MAX_DELTA_PI, MAX_DELTA_PI);
+	return posDelta * 0.1;
+}

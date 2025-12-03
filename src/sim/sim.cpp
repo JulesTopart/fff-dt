@@ -347,7 +347,10 @@ void Sim::step(Timestep ts) {
 		prefixSum->bindBuffer();
 
 		GPU_PROFILE(solver_total_time,
-			elapsedTime += ts;
+
+			for (int i = 0; i < settings.solver_substep; i++) {
+
+			elapsedTime += ts / settings.solver_substep;
 
 			solver->use();
 			settings.setTimestep(ts.getSeconds());
@@ -362,9 +365,9 @@ void Sim::step(Timestep ts) {
 
 			static float acc_volume = 0.0f;
 			float flow_rate = m_current_flowrate;
-			acc_volume += flow_rate * ts.getSeconds();
+			acc_volume += flow_rate * ts.getSeconds() / settings.solver_substep;
 
-			if (flow_rate * ts.getSeconds() > emitterVolume) {
+			if (flow_rate * ts.getSeconds() / settings.solver_substep > emitterVolume) {
 				Console::warn() << "Flowrate too high for current emitter size! Increase emitter size or decrease flowrate" << Console::endl;
 			}
 			//Console::info() << "Flowrate: " << flow_rate << " mm3/s, Acc volume: " << acc_volume << " mm3" << Console::endl;
@@ -381,7 +384,7 @@ void Sim::step(Timestep ts) {
 
 
 
-			for (int i = 0; i < settings.solver_substep; i++) {
+			
 				solver->execute(2);
 
 

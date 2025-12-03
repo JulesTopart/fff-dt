@@ -1,0 +1,146 @@
+//?#version 430
+
+#pragma once
+//?#include "../common/uniforms.comp"
+//?#include "../common/constants.comp"
+//?#include "../common/buffers.comp"
+//?#include "../common/nns.comp"
+//?#include "sph.kernels.comp" 
+#include "../common/math.comp"
+
+//stress
+//Pa -> g/mm/s2
+const float youngsModulus = 71.0e8 ;//PLA in kPa
+const float poissonRatio = 0.15;//dimless
+const float mu = youngsModulus / (2.0 * (1.0 + poissonRatio));
+const float lambda = youngsModulus * poissonRatio / ((1.0 + poissonRatio) * (1.0 - 2.0 * poissonRatio));
+
+
+
+float computeVonMisesStress(mat3 sigma) {
+
+    float vonMises = sqrt(
+        0.5 * (
+            pow(sigma[0][0] - sigma[1][1], 2.0) + 
+            pow(sigma[1][1] - sigma[2][2], 2.0) + 
+            pow(sigma[2][2] - sigma[0][0], 2.0) + 
+            6.0 * (pow(sigma[0][1], 2.0) + pow(sigma[1][2], 2.0) + pow(sigma[0][2], 2.0))
+        )
+    );
+
+    return vonMises;
+}
+
+// Continuum mechanics
+mat3 computeRightCauchyGreenStrain(mat3 F){
+    return transpose(F) * F;
+}
+
+//Greeen lagrange strain
+mat3 computeGreenStrain(mat3 F){ //Given Cauchy Green
+    mat3 C = computeRightCauchyGreenStrain(F);
+    return 0.5 * (C - mat3(1)); //E
+}
+
+mat3 computeSmallStrain(mat3 F){ //Given Cauchy Green
+    return 0.5 * (F + transpose(F)) - mat3(1.0); //E
+}
+
+mat3 computeSecondPiolaKirchhoffStressSmall(mat3 Epsi) {
+    mat3 S = 2.0 * mu * Epsi + lambda * tr(Epsi) * mat3(1.0);
+    return S;
+}
+
+float computeStrainEnergySmall(mat3 Epsi) {
+    // Compute the second Piola-Kirchhoff stress tensor
+    mat3 S = 2.0 * mu * Epsi + lambda * tr(Epsi) * mat3(1.0);
+    
+    // Compute the strain energy density
+    float strainEnergyDensity = mu * frobeniusNormSq(Epsi) + 0.5 * lambda * pow(tr(Epsi), 2.0);
+    
+    return strainEnergyDensity;
+}
+
+
+
+mat3 computeSecondPiolaKirchhoffStress(mat3 F, mat3 R) {
+    mat3 P = 2 * mu * (F-R) + lambda * tr(transpose(R) * F - mat3(1.0) * R);
+    return P;
+}
+
+
+float computeStrainEnergyDensity(mat3 F, mat3 R) {
+    // Material parameters: Lamé constants (lambda and mu)
+    float trRtFI = tr(transpose(R)*F - mat3(1.0));
+    float psi = mu * frobeniusNormSq(F - R) + 0.5*lambda*trRtFI*trRtFI;
+    return psi;
+}
+
+
+
+float computeStrainEnergyDensity(mat3 E) {
+    // Material parameters: Lamé constants (lambda and mu)
+
+    // Compute the trace of the Green-Lagrange strain tensor E
+    float traceE = tr(E);
+
+    // Compute the trace of the squared Green-Lagrange strain tensor E^2
+    mat3 E2 = E * E;
+    float traceE2 = tr(E2);
+
+    // Calculate the strain energy density
+    float W = 0.5 * lambda * traceE * traceE + mu * traceE2;
+
+    return W;
+}
+
+
+
+float pbs_computeDensity(uint i){
+	float density = 0;
+	vec3 position = b_pi.xyz;
+
+	OVERNNS
+		if(j == i) continue;
+		if(!is_solid(j)) continue;
+		float dist = c_Dij;
+		if(dist < 1e-6 || dist > 2.0*H) continue;
+		float Wij = poly6(dist);
+		density += mj * Wij;
+	OVERNNS_END
+
+	return density;
+}
+
+vec3 pbs_computeXPSH(uint i){
+	vec3 xsphSum = vec3(0);
+	vec3 position = b_pi.xyz;
+
+	OVERNNS
+		if (j == i) continue;
+		if (c_Dij < EPSILON || c_Dij > H) continue;
+
+		vec3 vji = c_Vji;
+		float Wij = poly6(c_Rij);
+
+		// Clamp relative velocity
+		const float maxVel = 10.0 * H;
+		float vji_mag = length(vji);
+		if (vji_mag > maxVel) 
+			vji *= (maxVel / vji_mag); // optional
+
+		// Directional damping (more stable)
+		vec3 dir = normalize(c_Rij);
+		float v_dot = dot(vji, dir);
+
+		float rho_ij = u_artificialViscosityMultiplier * (b_rho_i + b_rho_j);
+		if (rho_ij < EPSILON) continue;
+
+		vec3 xsph = 0.1 * v_dot * dir * Wij / rho_ij;
+		xsphSum += xsph;
+	OVERNNS_END
+
+	const float maxValue = 200.0 * H;
+	xsphSum = clamp(xsphSum, vec3(-maxValue), vec3(maxValue));
+	return xsphSum;
+}

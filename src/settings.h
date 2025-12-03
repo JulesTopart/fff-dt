@@ -50,7 +50,7 @@ struct Settings {
 	//Solver settings
 	int solver_substep = 5;//4
 	int pressure_iteration = 3;//3
-	int visco_iteration = 30;//20
+	int visco_iteration = 5;//20
 	float overRelaxation = 1.0;
 
 	//Boundary Volume dimensions
@@ -73,8 +73,8 @@ struct Settings {
 	Uniform<float> particleMass 					= Uniform<float>("u_mass", 0.09);//mg
 	//Uniform<float> particleMass					= Uniform<float>("u_mass", 0.2);
 	const float particleVolume						= (1.0/1.39)*1e-3*(particleMass()/restDensity());//mm/3
-	Uniform<float> viscosity_a						= Uniform<float>("u_viscosity_a", 20);
-	Uniform<float> viscosity_b						= Uniform<float>("u_viscosity_b", 20);
+	Uniform<float> viscosity_a						= Uniform<float>("u_viscosity_a", 500);
+	Uniform<float> viscosity_b						= Uniform<float>("u_viscosity_b", 500);
 	//Uniform<float> artificialViscosityMultiplier	= Uniform<float>("u_artificialViscosityMultiplier", 47 * 0.001);
 	Uniform<float> artificialViscosityMultiplier	= Uniform<float>("u_artificialViscosityMultiplier", 0.0 * 0.001);
 	Uniform<float> artificialPressureMultiplier		= Uniform<float>("u_artificialPressureMultiplier",   0.5 * 0.001); //2.6 * 0.001
