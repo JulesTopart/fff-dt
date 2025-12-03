@@ -1,8 +1,10 @@
-![Header](doc/images/Github.header.png)
+
 
 # **Overview**
 
 This repository contains the implementation of a GPU-accelerated **material-extrusion digital twin** used for fast simulation and process control in fused filament fabrication (FFF). The system is built on top of the **Merlin GPU physics and rendering engine**, allowing all simulation, rendering, and data extraction to run entirely on the GPU.
+
+![Header](doc/images/Github.header.png)
 
 The project demonstrates how particle-based models, heat transfer, and toolpath-driven boundary conditions can be combined into a real-time digital twin. It also includes a Python-based reinforcement learning setup that uses a ZeroMQ interface to communicate with the simulator.
 * GPU-accelerated simulation of extrusion, bead formation, and cooling
